@@ -1,0 +1,521 @@
+---
+title: "data-replication"
+author: "Riley N Derby"
+date: "2024-04-01"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Data-replication assignment
+
+
+Introduction:
+I will be replicating results from a paper entitled "Adolescent male chimpanzees (Pan troglodytes) form social bonds with their brothers and others during the transition to adulthood" by Sandel et al.
+
+
+This paper explores social bonds during an understudied period of development. Although social bonds have been largely studied in adult chimpanzees, their development, and when they are formed is not well understood. The authors establish a precedent for bonds being formed between male chimpanzees of similar age, rank, and between maternal kin. However, adolescent males do not form hierarchies with one another, so do they still form bonds? And if so, who do they form bonds with? 
+
+In order to answer these questions, the authors observed a total of 18 chimpanzees from Ngogo over the course of a year. 10 were adolescents between ages 12-16, and 8 were young adults between ages 17-21. They collected behavioral data including association (within the same party), proximity, and grooming interactions. Age was calculated based on observed births. Kinship was calculated using 19-44 autosomal microsatellietes in addition to mitochondrial DNA as in previous studies of the population. This allowed for classification of the kin categories (maternal brothers, paternal brothers, father and sons, or unrelated). Unrelated individuals included all types of dyads including distant relatives such as uncle and nephew or cousins. 
+
+
+Visualization of Data: 
+
+Let's start out by referencing all the packages we need for this assignment
+```{r}
+library(tidyverse)
+library(MuMIn)
+library(lme4)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(magrittr)
+library(htmltools)
+```
+
+Now let's load in the data from the study and get an idea of how it looks
+```{r}
+data <- read_csv("C:/Users/rnder/OneDrive/Desktop/2020_redo/dyad_DATA_Jan2019.csv")
+glimpse(data)
+
+#lets find how many unique individuals are in the study
+nodes <- as.data.frame(unique(data$IndividualID)) #number of males in the study == 54 males
+```
+
+Lets also load in a demography file I have from Ngogo to do a quick visual cross check for some of these relationships
+```{r}
+demog <- read_csv("C:/Users/rnder/OneDrive/Desktop/2020_redo/demographyForNetworks_22.csv")
+glimpse(demog)
+
+demog1 <- demog %>%
+  filter(Sex == "Male")%>%#narrow down to males for a visual check of relationships
+  arrange(mother)
+
+
+demog2 <- right_join(demog1, nodes, by = c("individualID" = "unique(data$IndividualID)"))## Hawkins is in this file twice so lets eliminate row 2
+
+#eliminate row 2 in demog2 file
+demog2 <- demog2[-2, ]
+```
+Here is a list of known maternal brothers from visual check of demog2: Peterson-Carter; Django-Barktok-Basie; Abrams-Jarman; Benny-Jackson-Yoyo; Lovano-Dylan; Monk-Richmond-Hutcherson; Hare-Morton; Damien-Rollins; Wilson-Elton; Rashaan-Wayne; Mulligan-Mitchell; Booker-Evans; Barron-Orff-Garett
+
+lets look at paternal brothers now
+```{r}
+demog2 <- demog2 %>%
+  arrange(father)
+```
+Here is a list of known paternal brothers from visual check:
+Wilson-Wayne-Evans; Peterson-Benny-Yoyo; Hicks-Buckner-Erroll-Orff; Hawkins-Lovano-Booker-Barron; Bosko-Elton; Wes-Murray; Hutcherson-Porkpie; Damien-Rollins-Rashaan; Jackson-Monk-Haden-Miles
+
+```{r}
+##narrow down to fathers that appear in nodes data 
+demog3 <- inner_join(demog2, nodes, by = c("father" = "unique(data$IndividualID)"))
+
+demog3 <- demog3%>%
+  arrange(father)
+```
+Here is a list of Father-son pairs from visual check:
+Bartok-Evans, Wilson, Wayne; Brownface-Garett; Dizzy-Django; Dexter-Chopin;Garrison-Peterson, Benny, Yoyo; Hare-Hicks, Buckner,Erroll,Orff; Miles-Wes, Murray; Monk-Jarman; Morton-BillyBragg; Mulligan-Peewee; Mweya-Dexter; Ornette-Abrams
+
+
+lets pull back up our dataset and do a quick visual check
+```{r}
+#pull at matbros to the top to cross-check with our list
+
+#Peterson-Carter; Django-Barktok-Basie; Abrams-Jarman; Benny-Jackson-Yoyo; Lovano-Dylan; Monk-Richmond-Hutcherson; Hare-Morton; Damien-Rollins; Wilson-Elton; Rashaan-Wayne; Mulligan-Mitchell; Booker-Evans; Barron-Orff-Garett
+
+data %>%
+  arrange(Mat_Bro)
+```
+-Benny-Yoyo are full brothers but looks like authors chose to keep them as simply maternal brothers in family classification.
+-Not all MatBros interacted, but Mulligan-Mitchell did, but they are not included in Matbro category right now so we will fix that before analyses
+
+```{r}
+#pull all patbros to the top to cross-check with our list
+#Wilson-Wayne-Evans; Peterson-Benny-Yoyo; Hicks-Buckner-Erroll-Orff; Hawkins-Lovano-Booker-Barron; Bosko-Elton; Wes-Murray; Hutcherson-Porkpie; Damien-Rollins-Rashaan; Jackson-Monk-Haden-Miles
+data %>%
+  arrange(Pat_Bro)
+```
+-Again, all patbros did not interact, but doesn't look like we are missing correct classifications
+
+```{r}
+#pull all father-sons to top to cross-check
+#Bartok-Evans, Wilson, Wayne; Brownface-Garett; Dizzy-Django; Dexter-Chopin;Garrison-Peterson, Benny, Yoyo; Hare-Hicks, Buckner,Erroll,Orff; Miles-Wes, Murray; Monk-Jarman; Morton-BillyBragg; Mulligan-Peewee; Mweya-Dexter; Ornette-Abrams
+data %>%
+  arrange(Father)
+```
+-All father sons didn't interact but doesn't look like we are missing correct classifications
+
+
+So lets correct Mulligan-Mitchell classification before advancing
+```{r}
+data
+
+row_index <- which(data$Dyad == "Mitchell_Mulligan")
+
+# Update the 'Mat_Bro' and 'Family' columns at the specified row index
+data[row_index, "Mat_Bro"] <- "MatBro"
+data[row_index, "Family"] <- "MatBro"
+
+#you get this error message.... but it still works and corrects mitchell and mulligan relationship: Error in exists(cacheKey, where = .rs.WorkingDataEnv, inherits = FALSE) : invalid first argument Error in assign(cacheKey, frame, .rs.CachedDataEnv) :  attempt to use zero-length variable name
+```
+
+
+Now lets take a look at association, proximity and grooming distributions
+```{r}
+#Association
+ggplot(data = data, aes(x= Association)) +
+  geom_histogram(alpha = 0.5)+
+  theme_classic()
+
+#I have a different number of dyads so lets see if they excluded 0s.... its different both times?? 954 and 842 instead of 936
+#lets carry on
+data1 <- filter(data, Association > 0)
+
+ggplot(data = data1, aes(x= Association)) +
+  geom_histogram(alpha = 0.5)+
+  theme_classic()+
+  geom_vline(xintercept = mean(data1$Association), color = "red", linetype = "dashed", size = 1)+
+  geom_vline(xintercept = mean(data1$Association) + sd(data1$Association), color = "blue", linetype = "dotted", size = 1) +
+    geom_vline(xintercept = mean(data1$Association) - sd(data1$Association), color = "blue", linetype = "dotted", size = 1) +
+  labs(x = "follows in assoc")
+
+
+#Proximity
+ggplot(data = data1, aes(x= Within_Five)) +
+  geom_histogram(alpha = 0.5)+
+  theme_classic()+
+  geom_vline(xintercept = mean(data1$Within_Five), color = "red", linetype = "dashed", size = 1)+
+  geom_vline(xintercept = mean(data1$Within_Five) + sd(data1$Within_Five), color = "blue", linetype = "dotted", size = 1) +
+    geom_vline(xintercept = mean(data1$Within_Five) - sd(data1$Within_Five), color = "blue", linetype = "dotted", size = 1)+
+  labs(x = "scans in prox")
+
+
+#Grooming
+ggplot(data = data1, aes(x= Groom)) +
+  geom_histogram(alpha = 0.5)+
+  theme_classic()+
+  geom_vline(xintercept = mean(data1$Groom), color = "red", linetype = "dashed", size = 1)+
+  geom_vline(xintercept = mean(data1$Groom) + sd(data1$Groom), color = "blue", linetype = "dotted", size = 1) +
+    geom_vline(xintercept = mean(data1$Groom) - sd(data1$Groom), color = "blue", linetype = "dotted", size = 1)+
+  labs(x = "minutes grooming")
+
+```
+
+The figures show the distributions of absolute associations, scans with 5m proximity, and minutes grooming. The red line is the mean and the blue lines are 1SD above and below mean
+
+Now lets take a look at the associations between the variables
+```{r}
+plot(Within_Five~Association, data1)
+plot(Groom~Association, data1)
+plot(Groom ~ Within_Five, data1)
+
+#it looks like prox and association as well as prox and grooming are correlated and perhaps grooming and association are weakly correlated
+
+cor.test(data1$Within_Five, data1$Association)
+cor.test(data1$Groom, data1$Association)
+cor.test(data1$Groom, data1$Within_Five)
+```
+
+
+
+Okay... now I need to create the dyadic indices for each variable in order to determine the bonds of the chimps."We computed dyadic association by dividing the total number of focal follows during which pairs of males were together by the number of times the focal subject was followed. Dyadic proximity was calculated as the total number of instantaneous samples in which pairs of males were ≤5 m apart, divided by the total number of instantaneous samples for the focal subject. Dyadic grooming was calculated as the total minutes pairs of males spent grooming over the course of the year, divided by the observation hours for the focal subject."
+
+Pulling from my data1, these will be the equations for the indices
+So Assoc = Association/Total_Follows
+Prox = Within_Five/Total_Scans
+Grooming = Groom/Total_Hours
+
+12-16 adolescents
+17-21 adults
+
+
+```{r}
+Dyad_index_kin <- data1 %>%
+  group_by(FocalID, IndividualID, Family) %>%
+  summarise(Assoc_index = Association/Total_Follows,
+            Prox_index = Within_Five/Total_Scans,
+            Groom_index = Groom/Total_Hours,
+            Focal_age = Focal_age,
+            ID2_age = ID2_age) %>%
+  arrange(Family)
+
+
+# now lets calculate the association strengths for adults/young adults to get bond level
+adult_index <- Dyad_index_kin %>%
+  filter(Focal_age > 17 & ID2_age > 17)
+
+table_adult <- adult_index %>%
+  mutate(meanAssoc = mean(adult_index$Assoc_index),
+         meanProx = mean(adult_index$Prox_index),
+         meanGroom = mean(adult_index$Groom_index),
+         sdAssoc = sd(adult_index$Assoc_index),
+         sdProx = sd(adult_index$Prox_index),
+         sdGroom = sd(adult_index$Groom_index))
+
+
+top_10_percent_assoc <- quantile(adult_index$Assoc_index, probs = 0.9, na.rm = TRUE)
+top_10_percent_prox <- quantile(adult_index$Prox_index, probs = 0.9, na.rm = TRUE)
+top_10_percent_groom <- quantile(adult_index$Groom_index, probs = 0.9, na.rm = TRUE)
+```
+
+
+okay so we have the values for the top 10% of adult relationships which are 
+Association greater than 0.5
+Prox greater than 0.0338
+Groom greater than 0.316
+
+these values all look correct from the figure in the paper...
+
+```{r}
+#so lets go back to full dataset
+#we need to figure out how many bonds individuals formed
+# for the t-test we need to find the "mean number bonds displayed by both age classes"
+
+assoc.bond.table <- Dyad_index_kin %>%
+  group_by(FocalID)%>%
+  filter(Assoc_index >= 0.5)
+
+prox.bond.table <- Dyad_index_kin %>%
+  group_by(FocalID)%>%
+  filter(Prox_index >= 0.0338)
+
+groom.bond.table <- Dyad_index_kin %>%
+  group_by(FocalID)%>%
+  filter(Groom_index >= 0.316)  
+
+assoc.bond.ind <-
+assoc.bond.table %>%
+  group_by(FocalID) %>%
+  summarize(age.id = mean(Focal_age),
+            AssocPartnerBondSum = length(FocalID))
+
+prox.bond.ind <-
+prox.bond.table %>%
+  group_by(FocalID) %>%
+  summarize(age.id = mean(Focal_age),
+            ProxPartnerBondSum = length(FocalID))
+
+groom.bond.ind <-
+groom.bond.table %>%
+  group_by(FocalID) %>%
+  summarize(age.id = mean(Focal_age),
+            GroomPartnerBondSum = length(FocalID))
+
+#combine sum of bond partner tables
+joined_table <- full_join(groom.bond.ind, prox.bond.ind, by = c("FocalID")) %>%
+  full_join(., assoc.bond.ind, by = "FocalID")
+#get rid of 3 age variable and combine them into 1 column
+joined_table <- joined_table %>%
+  mutate(age_combined = coalesce(age.id.x, age.id.y, age.id)) %>%
+  select(-age.id.x, -age.id.y, -age.id)
+```
+
+we have 10 adolescents and 8 young adults which is correct
+
+Now lets calculate the mean number of bonds adolescents form compared to young adults
+```{r}
+adol.joined.table <- filter(joined_table, age_combined < 17)
+ya.joined.table <- filter(joined_table, age_combined > 17)
+
+
+adol.joined.table <- adol.joined.table %>%
+  mutate(MeanAssocBond = mean(adol.joined.table$AssocPartnerBondSum, na.rm = T),
+         sdAssocBond = sd(adol.joined.table$AssocPartnerBondSum, na.rm = T),
+         MeanProxBond = mean(adol.joined.table$ProxPartnerBondSum, na.rm = T),
+         sdProxBond = sd(adol.joined.table$ProxPartnerBondSum, na.rm = T),
+         MeanGroomBond = mean(adol.joined.table$GroomPartnerBondSum, na.rm = T),
+         sdGroomBond = sd(adol.joined.table$GroomPartnerBondSum, na.rm = T))
+
+ya.joined.table <- ya.joined.table %>%
+  mutate(MeanAssocBond = mean(ya.joined.table$AssocPartnerBondSum, na.rm = T),
+         sdAssocBond = sd(ya.joined.table$AssocPartnerBondSum, na.rm = T),
+         MeanProxBond = mean(ya.joined.table$ProxPartnerBondSum, na.rm = T),
+         sdProxBond = sd(ya.joined.table$ProxPartnerBondSum, na.rm = T),
+         MeanGroomBond = mean(ya.joined.table$GroomPartnerBondSum, na.rm = T),
+         sdGroomBond = sd(ya.joined.table$GroomPartnerBondSum, na.rm = T))
+```
+
+I got different number of mean bonds for each category from the manuscript...
+
+lets do the welchs test to see if they are still consistent
+```{r}
+assoc_t_stat <- t.test(x = adol.joined.table$AssocPartnerBondSum, y = ya.joined.table$AssocPartnerBondSum, mu = 0, alternative = "two.sided", var.equal = FALSE)
+# var.equal = FALSE is the DEFAULT for `t.test()`
+assoc_t_stat
+
+prox_t_stat <- t.test(x = adol.joined.table$ProxPartnerBondSum, y = ya.joined.table$ProxPartnerBondSum, mu = 0, alternative = "two.sided", var.equal = FALSE)
+# var.equal = FALSE is the DEFAULT for `t.test()`
+prox_t_stat
+
+groom_t_stat <- t.test(x = adol.joined.table$GroomPartnerBondSum, y = ya.joined.table$GroomPartnerBondSum, mu = 0, alternative = "two.sided", var.equal = FALSE)
+# var.equal = FALSE is the DEFAULT for `t.test()`
+groom_t_stat
+```
+
+So there are similar findings to the paper with no difference between categories in number of bonds formed per different age categories although I found a different mean...
+
+
+now lets find the number of 'triple-bonds' so we can generate a distribution
+
+```{r}
+#for this we need to join the '.bond.table' files from above
+
+
+##lets get rid of prox and groom from the assoc table... do the same for other 2 tables and add a 'dyad' column so we can combine tables with only dyads that had triple bonds
+assoc.bond.table <- assoc.bond.table %>%
+  select(-c(Prox_index, Groom_index)) %>%
+  mutate(dyad = paste(FocalID, IndividualID, sep = "_"))
+
+prox.bond.table <- prox.bond.table %>%
+  select(-c(Assoc_index, Groom_index)) %>%
+  mutate(dyad = paste(FocalID, IndividualID, sep = "_"))
+
+groom.bond.table <- groom.bond.table %>%
+  select(-c(Prox_index, Assoc_index)) %>%
+  mutate(dyad = paste(FocalID, IndividualID, sep = "_"))
+  
+
+triple_table <- full_join(groom.bond.table, prox.bond.table, by = c("dyad")) %>%
+  full_join(., assoc.bond.table, by = "dyad")
+
+
+### any rows with NA means that they did not have a triple bond so delete those rows
+triple_table1 <- triple_table %>%
+  drop_na() %>%
+  select(-contains(".y"), -contains(".x")) %>%
+   select(dyad, FocalID, IndividualID, Family, Groom_index,Prox_index, Assoc_index, Focal_age, ID2_age)
+```
+
+From this, it looks like there are 11 triple bonds... 8 of which are from adolescents, 3 are young adults
+
+--I found 11 triple bonds whereas the manuscript found 10--
+
+"Here we calculated the number of times adolescent males exhibited bonds based on all three behaviors divided by the total number of triple bonds formed by adolescent and young adult subjects. We used the resulting percentage as a test statistic"
+
+```{r}
+test_stat <- 8/11
+```
+
+"To generate a null distribution of the percentage of strong bonds formed by adolescents, we drew pairs of males at random without replacement from the pool of 936 total dyads, holding the observed number of triple bonds constant. We then calculated the number of times adolescents appeared in the samples of triple bonds relative to the total number of triply‐bonded pairs and used this as one datum in the null distribution. We repeated this process 10,000 times to generate a 95% confidence interval. We compared the observed test statistic to the null distribution to evaluate whether adolescents exhibited strong bonds as frequently as did young adults."
+```{r}
+str(triple_table1)
+
+#lets add a new column to the data for triple bonds
+
+data$triple <- 0
+data$triple[data$Dyad %in% triple_table1$dyad & data$triple == 0] <- 1
+
+
+# Initialize an empty vector to store the percentages
+null_distribution <- numeric(10000)
+
+# Define a function to generate random samples and calculate percentages
+generate_null_distribution <- function(data, triple_bonds, n_samples = 10000) {
+  for (i in 1:n_samples) {
+    sampled_pairs <- sample(data$Dyad, size = triple_bonds, replace = FALSE)
+     adolescents_count <- sum(data$Focal_age[data$Dyad %in% sampled_pairs] < 17)
+    percentage <- adolescents_count / triple_bonds
+    null_distribution[i] <- percentage
+  }
+  return(null_distribution)
+}
+
+null_distribution <- generate_null_distribution(data, triple_bonds = 11)
+
+head(null_distribution)
+
+confidence_interval <- quantile(null_distribution, c(0.025, 0.975))
+
+confidence_interval
+
+
+
+```
+
+
+Lets run the models for association, proxmity, and grooming
+
+```{r}
+library(lme4)
+str(data$Family)
+# Convert 'Family' to a factor
+data$Family <- factor(data$Family)
+
+# Check the levels of 'Family' before releveling
+levels(data$Family)
+
+# Change the reference level to 'Unrelated'
+data$Family <- relevel(data$Family, ref = "Unrelated")
+
+# Check the levels of 'Family' after releveling
+levels(data$Family)
+data$Family <- relevel(data$Family, ref = "Unrelated")
+
+assoc.model.full <- glmer.nb(Association ~ Focal_age + ID2_age + abs(Age_Diff) + Family +
+                    log(Total_Follows) + (1|FocalID) + (1|IndividualID),
+                   data = data)
+summary(assoc.model.full)
+
+#now lets do the same but without 0 values for association...aka use data1 
+
+# Convert 'Family' to a factor
+data1$Family <- factor(data1$Family)
+
+# Check the levels of 'Family' before releveling
+levels(data1$Family)
+
+# Change the reference level to 'Unrelated'
+data1$Family <- relevel(data1$Family, ref = "Unrelated")
+
+# Check the levels of 'Family' after releveling
+levels(data1$Family)
+data1$Family <- relevel(data1$Family, ref = "Unrelated")
+
+assoc.model <- glmer.nb(Association ~ Focal_age + ID2_age + abs(Age_Diff) + Family +
+                    log(Total_Follows) + (1|FocalID) + (1|IndividualID),
+                   data = data1)
+
+
+summary(assoc.model)
+
+
+##For grooming and prox. lets run models with data1 since pairs needed to associate at least once
+#proximity
+prox.model <- glmer.nb(Within_Five ~ Focal_age + ID2_age + abs(Age_Diff) + Family + log(Association) + (1|FocalID) + (1|IndividualID), data1)
+
+summary(prox.model)
+
+#grooming
+data2 <- data1
+data2$Groom <- as.integer(data2$Groom)
+
+# Fit negative binomial model with integer Groom variable
+groom.model <- glmer.nb(Groom ~ Focal_age + ID2_age + abs(Age_Diff) + Family + log(Association) + (1|FocalID) + (1|IndividualID), data = data2)
+
+summary(groom.model)
+```
+
+
+```{r}
+library(ggplot2)
+
+# Create a new variable for Association/Total_Follows
+data1$Assoc_Ratio <- data1$Association / data1$Total_Follows
+
+# Create the boxplot using ggplot
+ggplot(data1, aes(x = Family, y = Assoc_Ratio, fill = Family)) +
+  geom_boxplot(color = "darkgray") +
+  geom_jitter(width = 0.2, alpha = 0.7, color = "black") +
+  labs(
+    x = NULL,
+    y = expression(bold("Association" ~ "/" ~ "Total Follows")),
+    title = "Boxplot of Association to Total Follows by Family"
+  ) +
+  theme_minimal()
+
+
+# Create a new variable for the ratio
+data1$ProxRatio <- data1$Within_Five / data1$Association
+
+# Create the boxplot using ggplot
+ggplot(data1, aes(x = Family, y = ProxRatio, fill = Family)) +
+  geom_boxplot(color = "darkgray") +
+  geom_jitter(width = 0.2, alpha = 0.7, color = "black") +
+  labs(
+    x = NULL,
+    y = expression(bold("Proximity" ~ "/" ~ "Association")),
+    title = "Boxplot of Proximity to Association by Family"
+  ) +
+  theme_minimal()
+
+# Create a new variable for the groom ratio
+data1$GroomRatio <- data1$Groom / data1$Association
+
+# Create the boxplot using ggplot
+ggplot(data1, aes(x = Family, y = GroomRatio, fill = Family)) +
+  geom_boxplot(color = "darkgray") +
+  geom_jitter(width = 0.2, alpha = 0.7, color = "black") +
+  labs(
+    x = NULL,
+    y = expression(bold("Grooming" ~ "/" ~ "Association")),
+    title = "Boxplot of Grooming to Association by Family"
+  ) +
+  theme_minimal()
+```
+
+
+Discussion:
+
+This assignment was enlightening to the challenges of recreating and having reproducible research based on description alone. Obviously, there is issue in the sense that I could not even get the same sample size based on the data set provided. Aaron and the other co-authors knew why they reduced the sample, but I can only assume (death of a male within the sample). Even if I am correct, I do not know which male and I do not know if they remove him from the very beginning or include him for a certain amount of time. I also found a discrepency in the demographic data as Mulligan and Mitchell are maternal brothers. Perhaps this was not known during the time of writing the manuscript and does not likely alter the results a great deal. However, the more accurate the data, the better! Although my sample size was slightly different, I was largely quite accurate in my re-analysis of the data provided. 
+
+All of the major findings of the paper are further supported by my analysis and the major effects remain the same. Perhaps unsurprisingly, the hardest part of the assignment was the data organization and trying to replicate the descriptive statistics and preliminary analyses. I especially had trouble with recreating their analysis of triple-bonds using only their description of the permutation process. I was able to calculate a similar test-statistic but may have failed to calculate a correct null distribution for testing.
+
+Another concern I have with my code is that the models I generated from the description provided within the text did not converge. I do not think this invalidates them, but it does raise questions about better modelling techniques that could have been used. I also think that the association/total follows box plot may be mistaken as it does not align quite right with mine.  
+
+So adolescent chimpanzees preferably associate and sit with their maternal brothers and groom their biological fathers. This is an interesting result that should be further explored with the inclusion of females within the analyses. This could help understand mating strategies, strength of male-female bonds in comparison to male-male, and what females are important partners during the transition to adulthood. Stay tuned for a manuscript from myself and Aaron soon. 
+
